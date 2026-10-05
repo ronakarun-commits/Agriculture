@@ -20,6 +20,49 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+st.markdown(
+    """
+    <style>
+    :root {
+        --ink: #17324d;
+        --muted: #607286;
+        --leaf: #1f7a5a;
+        --line: #d9e5e8;
+    }
+    .block-container { padding-top: 2rem; padding-bottom: 3rem; }
+    [data-testid="stSidebar"] { background: #f4f8f6; border-right: 1px solid var(--line); }
+    [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2,
+    [data-testid="stSidebar"] h3 { color: var(--ink); }
+    .app-hero {
+        background: linear-gradient(110deg, #17324d 0%, #1f7a5a 100%);
+        border-radius: 16px;
+        padding: 1.6rem 2rem;
+        margin-bottom: 1.5rem;
+        color: white;
+        box-shadow: 0 10px 28px rgba(23, 50, 77, 0.14);
+    }
+    .app-hero h1 { margin: 0; font-size: 2.15rem; letter-spacing: 0; color: white; }
+    .app-hero p { margin: 0.45rem 0 0; color: #d7eee5; font-size: 1rem; }
+    .section-kicker {
+        color: var(--leaf);
+        font-size: 0.75rem;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        margin-bottom: 0.25rem;
+    }
+    div[data-testid="stMetric"] {
+        background: white;
+        border: 1px solid var(--line);
+        border-left: 4px solid var(--leaf);
+        padding: 0.8rem 1rem;
+        border-radius: 10px;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
 @st.cache_resource
 def train_id3_model():
     # Read CSV dataset
@@ -51,16 +94,10 @@ def train_id3_model():
 # Load data and train model
 model, label_encoders, feature_columns, X_test, y_test, df_raw = train_id3_model()
 
-# Header
 st.markdown(
-    "<h1 style='text-align: center;'>🌾 Smart Irrigation Predictor</h1>", 
+    "<div class='app-hero'><div class='section-kicker' style='color:#b9ead5;'>FIELD INTELLIGENCE</div><h1>Smart Irrigation Predictor</h1><p>Decision support for healthier crops, clearer priorities, and smarter water use.</p></div>",
     unsafe_allow_html=True
 )
-st.markdown(
-    "<h3 style='text-align: center;'>ML Based Irrigation and Spatial Analytics</h3>", 
-    unsafe_allow_html=True
-)
-st.markdown("---")
 
 # Initialize Session State
 if "page" not in st.session_state:
@@ -69,11 +106,11 @@ if "page" not in st.session_state:
 # Sidebar Navigation
 st.sidebar.title("Navigation")
 with st.sidebar:
-    if st.button("Irrigation Predictor", use_container_width=True):
+    if st.button("Irrigation Predictor", width="stretch"):
         st.session_state.page = "Irrigation Predictor"
-    if st.button("Visualizations", use_container_width=True):
+    if st.button("Visualizations", width="stretch"):
         st.session_state.page = "Visualizations"
-    if st.button("GIS Satellite Map", use_container_width=True):
+    if st.button("GIS Satellite Map", width="stretch"):
         st.session_state.page = "GIS Satellite Map"
 
 # Helper Function for Custom Styled Sliders (Fixed Flexbox Layout to Prevent Shrinkage)
@@ -174,7 +211,7 @@ if st.session_state.page == "Irrigation Predictor":
     input_df = pd.DataFrame([input_dict])
 
     # Prediction Action Button
-    if st.button("Predict Irrigation Need & Pump Status", use_container_width=True):
+    if st.button("Predict Irrigation Need & Pump Status", width="stretch"):
         prediction = model.predict(input_df)[0]
         probabilities = model.predict_proba(input_df)[0]
         class_names = model.classes_
@@ -290,7 +327,7 @@ if st.session_state.page == "Irrigation Predictor":
             for i in range(1, steps + 1):
                 current_val = (target_stress / steps) * i
                 fig_anim = create_speedometer_gauge(current_val)
-                gauge_placeholder.plotly_chart(fig_anim, use_container_width=True, key=f"speedo_step_{i}")
+                gauge_placeholder.plotly_chart(fig_anim, width="stretch", key=f"speedo_step_{i}")
                 time.sleep(0.02)
 
         st.markdown("### Field Condition Analysis")
@@ -315,7 +352,7 @@ if st.session_state.page == "Irrigation Predictor":
             "Parameter": ["Soil Type", "Soil pH", "Soil Moisture", "Crop", "Growth Stage", "Season", "Temperature", "Rainfall", "Mulching"],
             "Value": [soil_type, f"{soil_ph}", f"{soil_moisture}%", crop_type, crop_stage, season, f"{temp} °C", f"{rainfall} mm", mulching]
         })
-        st.dataframe(summary, use_container_width=True)
+        st.dataframe(summary, width="stretch")
 
 # ==========================================
 # PAGE 2: VISUALIZATIONS
@@ -360,7 +397,7 @@ if st.session_state.page == "Visualizations":
         )
         fig.update_xaxes(title="Predicted Class")
         fig.update_yaxes(title="Actual Class")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
         st.info("The confusion matrix shows high precision across Low and Medium irrigation classes, with strong diagonal alignment indicating accurate field predictions.")
 
     with tab3:
@@ -378,7 +415,7 @@ if st.session_state.page == "Visualizations":
             color="Importance",
             color_continuous_scale="Blues"
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
         st.info("Growth Stage, Soil Moisture, Mulching, and Rainfall are the dominant features driving the model's split points.")
 
     with tab4:
@@ -403,7 +440,7 @@ if st.session_state.page == "Visualizations":
             labels={"x": "Tree Depth", "y": "Accuracy"},
             title="ID3 Decision Tree Accuracy across Max Depths"
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
         st.info("Model accuracy plateaus around depth 5. Pruning at max depth = 5 prevents overfitting on high-frequency noise.")
 
 # ==========================================
@@ -450,7 +487,11 @@ if st.session_state.page == "GIS Satellite Map":
         'Medium': 'Schedule irrigation',
         'Low': 'Monitor only'
     })
-    map_df['Recommended_Water_mm'] = map_df['Irrigation_Need'].map(water_targets)
+    moisture_deficit = (45.0 - map_df['Soil_Moisture']).clip(lower=0)
+    map_df['Recommended_Water_mm'] = (
+        map_df['Irrigation_Need'].map(water_targets)
+        + moisture_deficit * 0.25
+    ).where(map_df['Irrigation_Need'] != 'Low', 0).clip(upper=45).round(1)
     map_df['Estimated_Water_L'] = (
         map_df['Field_Area_hectare'] * map_df['Recommended_Water_mm'] * 10000
     )
@@ -511,7 +552,7 @@ if st.session_state.page == "GIS Satellite Map":
             )
 
             fig_map.update_layout(height=550, margin={"r": 0, "t": 40, "l": 0, "b": 0})
-            st.plotly_chart(fig_map, use_container_width=True)
+            st.plotly_chart(fig_map, width="stretch")
 
     st.markdown("---")
     st.markdown("### Irrigation Action Summary")
@@ -531,6 +572,6 @@ if st.session_state.page == "GIS Satellite Map":
     priority_table = filtered_map_df.sort_values('Priority_Score', ascending=False)
     st.dataframe(
         priority_table[priority_columns].head(15),
-        use_container_width=True,
+        width="stretch",
         hide_index=True
     )
