@@ -411,9 +411,8 @@ if st.session_state.page == "GIS Satellite Map":
     st.subheader("GIS Satellite & Spatial Moisture Analytics")
     
     st.markdown("""
-    This macro-geographic dashboard simulates satellite-assisted spatial monitoring across regional farm clusters. 
-    It enables agricultural managers to track real-time soil moisture levels, identify high-urgency irrigation zones, 
-    and optimize water distribution across geographic regions.
+    This dashboard currently uses simulated regional coordinates because the dataset does not contain GPS fields.
+    It identifies irrigation urgency, ranks fields for action, and estimates the water volume required for each zone.
     """)
     st.markdown("---")
 
@@ -428,13 +427,26 @@ if st.session_state.page == "GIS Satellite Map":
     map_df = df_raw.sample(min(300, len(df_raw)), random_state=42).copy()
 
     lats, lons = [], []
+    random_generator = np.random.default_rng(42)
     for reg in map_df['Region']:
         base = region_coords.get(reg, {'lat': 20.5937, 'lon': 78.9629})
-        lats.append(base['lat'] + np.random.uniform(-1.5, 1.5))
-        lons.append(base['lon'] + np.random.uniform(-1.5, 1.5))
+        lats.append(base['lat'] + random_generator.uniform(-1.5, 1.5))
+        lons.append(base['lon'] + random_generator.uniform(-1.5, 1.5))
 
     map_df['latitude'] = lats
     map_df['longitude'] = lons
+    priority_scores = {'High': 100, 'Medium': 60, 'Low': 20}
+    water_targets = {'High': 35, 'Medium': 20, 'Low': 0}
+    map_df['Priority_Score'] = map_df['Irrigation_Need'].map(priority_scores)
+    map_df['Recommended_Action'] = map_df['Irrigation_Need'].map({
+        'High': 'Irrigate immediately',
+        'Medium': 'Schedule irrigation',
+        'Low': 'Monitor only'
+    })
+    map_df['Recommended_Water_mm'] = map_df['Irrigation_Need'].map(water_targets)
+    map_df['Estimated_Water_L'] = (
+        map_df['Field_Area_hectare'] * map_df['Recommended_Water_mm'] * 10000
+    )
 
     col_map1, col_map2 = st.columns([3, 1])
 
@@ -447,7 +459,10 @@ if st.session_state.page == "GIS Satellite Map":
         need_options = ["All Urgency Levels", "High", "Medium", "Low"]
         selected_need = st.selectbox("Filter Irrigation Need", options=need_options, index=0)
         
-        color_by = st.selectbox("Color Code By", options=['Irrigation_Need', 'Soil_Moisture', 'Crop_Type'])
+        color_by = st.selectbox(
+            "Color Code By",
+            options=['Irrigation_Need', 'Priority_Score', 'Soil_Moisture', 'Crop_Type']
+        )
 
     filtered_map_df = map_df.copy()
     if selected_region != "All Regions":
@@ -457,36 +472,56 @@ if st.session_state.page == "GIS Satellite Map":
 
     with col_map1:
         color_map = {'High': '#ef5350', 'Medium': '#ffca28', 'Low': '#66bb6a'}
-        
-        fig_map = px.scatter_mapbox(
-            filtered_map_df,
-            lat="latitude",
-            lon="longitude",
-            color=color_by,
-            size="Field_Area_hectare",
-            hover_name="Crop_Type",
-            hover_data={
-                "Soil_Moisture": ":.1f%",
-                "Rainfall_mm": ":.0f mm",
-                "Temperature_C": ":.1f °C",
-                "Irrigation_Need": True,
-                "latitude": False,
-                "longitude": False
-            },
-            color_discrete_map=color_map if color_by == 'Irrigation_Need' else None,
-            zoom=4.2,
-            center={"lat": 20.5937, "lon": 78.9629},
-            mapbox_style="open-street-map",
-            title="Agricultural Field Clusters & Irrigation Stress Overlay"
-        )
 
-        fig_map.update_layout(height=550, margin={"r": 0, "t": 40, "l": 0, "b": 0})
-        st.plotly_chart(fig_map, use_container_width=True)
+        if filtered_map_df.empty:
+            st.warning("No fields match the selected filters.")
+        else:
+            fig_map = px.scatter_mapbox(
+                filtered_map_df,
+                lat="latitude",
+                lon="longitude",
+                color=color_by,
+                size="Field_Area_hectare",
+                hover_name="Crop_Type",
+                hover_data={
+                    "Soil_Moisture": ":.1f%",
+                    "Rainfall_mm": ":.0f mm",
+                    "Temperature_C": ":.1f °C",
+                    "Irrigation_Need": True,
+                    "Recommended_Action": True,
+                    "Recommended_Water_mm": True,
+                    "Estimated_Water_L": ":,.0f L",
+                    "latitude": False,
+                    "longitude": False
+                },
+                color_discrete_map=color_map if color_by == 'Irrigation_Need' else None,
+                zoom=4.2,
+                center={"lat": 20.5937, "lon": 78.9629},
+                mapbox_style="open-street-map",
+                title="Field Irrigation Priority Map"
+            )
+
+            fig_map.update_layout(height=550, margin={"r": 0, "t": 40, "l": 0, "b": 0})
+            st.plotly_chart(fig_map, use_container_width=True)
 
     st.markdown("---")
-    st.markdown("### Regional Moisture & Stress Summary")
-    c1, c2, c3, c4 = st.columns(4)
+    st.markdown("### Irrigation Action Summary")
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Active Fields Monitored", len(filtered_map_df))
     c2.metric("Avg Soil Moisture", f"{filtered_map_df['Soil_Moisture'].mean():.1f}%" if len(filtered_map_df) > 0 else "N/A")
     c3.metric("High Need Fields", len(filtered_map_df[filtered_map_df['Irrigation_Need'] == 'High']))
     c4.metric("Total Monitored Area", f"{filtered_map_df['Field_Area_hectare'].sum():.1f} Ha" if len(filtered_map_df) > 0 else "0 Ha")
+    c5.metric("Estimated Water", f"{filtered_map_df['Estimated_Water_L'].sum():,.0f} L" if len(filtered_map_df) > 0 else "0 L")
+
+    st.markdown("### Highest Priority Fields")
+    priority_columns = [
+        'Region', 'Crop_Type', 'Soil_Moisture', 'Irrigation_Need',
+        'Priority_Score', 'Recommended_Action', 'Recommended_Water_mm',
+        'Estimated_Water_L'
+    ]
+    priority_table = filtered_map_df.sort_values('Priority_Score', ascending=False)
+    st.dataframe(
+        priority_table[priority_columns].head(15),
+        use_container_width=True,
+        hide_index=True
+    )
