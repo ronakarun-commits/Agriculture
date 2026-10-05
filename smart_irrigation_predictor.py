@@ -11,6 +11,8 @@ from sklearn.preprocessing import LabelEncoder
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import confusion_matrix, accuracy_score
 
+MAP_COLUMNS = ['Field_ID', 'Latitude', 'Longitude', 'Coordinate_Source']
+
 st.set_page_config(
     page_title="Smart Irrigation Predictor",
     page_icon="🌾",
@@ -35,7 +37,7 @@ def train_id3_model():
             encoders[col] = le
 
     # Define target and features using exact column name 'Irrigation_Need'
-    X = data.drop(columns=['Irrigation_Need'])
+    X = data.drop(columns=['Irrigation_Need'] + [column for column in MAP_COLUMNS if column in data.columns])
     y = df['Irrigation_Need'] # Keep target as string ('High', 'Medium', 'Low')
 
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
@@ -383,7 +385,7 @@ if st.session_state.page == "Visualizations":
         st.markdown("### Accuracy vs Tree Depth")
         depths = list(range(1, 11))
         accuracies = []
-        X_tr = df_raw.drop(columns=['Irrigation_Need'])
+        X_tr = df_raw.drop(columns=['Irrigation_Need'] + [column for column in MAP_COLUMNS if column in df_raw.columns])
         for col in X_tr.select_dtypes(include=['object', 'category']).columns:
             X_tr[col] = label_encoders[col].transform(X_tr[col].astype(str))
         
@@ -426,15 +428,20 @@ if st.session_state.page == "GIS Satellite Map":
 
     map_df = df_raw.sample(min(300, len(df_raw)), random_state=42).copy()
 
-    lats, lons = [], []
-    random_generator = np.random.default_rng(42)
-    for reg in map_df['Region']:
-        base = region_coords.get(reg, {'lat': 20.5937, 'lon': 78.9629})
-        lats.append(base['lat'] + random_generator.uniform(-1.5, 1.5))
-        lons.append(base['lon'] + random_generator.uniform(-1.5, 1.5))
-
-    map_df['latitude'] = lats
-    map_df['longitude'] = lons
+    if {'Latitude', 'Longitude'}.issubset(map_df.columns):
+        map_df['latitude'] = map_df['Latitude']
+        map_df['longitude'] = map_df['Longitude']
+        map_source = 'Dataset field coordinates'
+    else:
+        lats, lons = [], []
+        random_generator = np.random.default_rng(42)
+        for reg in map_df['Region']:
+            base = region_coords.get(reg, {'lat': 20.5937, 'lon': 78.9629})
+            lats.append(base['lat'] + random_generator.uniform(-1.5, 1.5))
+            lons.append(base['lon'] + random_generator.uniform(-1.5, 1.5))
+        map_df['latitude'] = lats
+        map_df['longitude'] = lons
+        map_source = 'Simulated regional coordinates'
     priority_scores = {'High': 100, 'Medium': 60, 'Low': 20}
     water_targets = {'High': 35, 'Medium': 20, 'Low': 0}
     map_df['Priority_Score'] = map_df['Irrigation_Need'].map(priority_scores)
@@ -447,6 +454,7 @@ if st.session_state.page == "GIS Satellite Map":
     map_df['Estimated_Water_L'] = (
         map_df['Field_Area_hectare'] * map_df['Recommended_Water_mm'] * 10000
     )
+    st.caption(f"Map source: {map_source}. Replace demo coordinates with surveyed GPS data for production use.")
 
     col_map1, col_map2 = st.columns([3, 1])
 
@@ -487,6 +495,7 @@ if st.session_state.page == "GIS Satellite Map":
                     "Soil_Moisture": ":.1f%",
                     "Rainfall_mm": ":.0f mm",
                     "Temperature_C": ":.1f °C",
+                    "Field_ID": True,
                     "Irrigation_Need": True,
                     "Recommended_Action": True,
                     "Recommended_Water_mm": True,
