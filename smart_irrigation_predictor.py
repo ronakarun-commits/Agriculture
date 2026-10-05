@@ -419,11 +419,11 @@ if st.session_state.page == "GIS Satellite Map":
     st.markdown("---")
 
     region_coords = {
-        'North': {'lat': 29.5, 'lon': 77.5},
-        'South': {'lat': 13.5, 'lon': 78.0},
-        'East': {'lat': 23.5, 'lon': 87.5},
-        'West': {'lat': 20.5, 'lon': 74.5},
-        'Central': {'lat': 21.5, 'lon': 78.5}
+        'North': {'lat': 28.9, 'lon': 77.8},
+        'South': {'lat': 13.0, 'lon': 77.6},
+        'East': {'lat': 22.6, 'lon': 88.4},
+        'West': {'lat': 18.5, 'lon': 73.9},
+        'Central': {'lat': 21.2, 'lon': 79.1}
     }
 
     map_df = df_raw.sample(min(300, len(df_raw)), random_state=42).copy()
@@ -437,8 +437,8 @@ if st.session_state.page == "GIS Satellite Map":
         random_generator = np.random.default_rng(42)
         for reg in map_df['Region']:
             base = region_coords.get(reg, {'lat': 20.5937, 'lon': 78.9629})
-            lats.append(base['lat'] + random_generator.uniform(-0.25, 0.25))
-            lons.append(base['lon'] + random_generator.uniform(-0.25, 0.25))
+            lats.append(base['lat'] + random_generator.uniform(-0.05, 0.05))
+            lons.append(base['lon'] + random_generator.uniform(-0.05, 0.05))
         map_df['latitude'] = lats
         map_df['longitude'] = lons
         map_source = 'Simulated regional coordinates'
