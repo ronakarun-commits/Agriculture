@@ -1,17 +1,3 @@
-None selected 
-
-Skip to content
-Using Somaiya Vidyavihar Mail with screen readers
-
-1 of 6,396
-(no subject)
-External
-Inbox
-
-Ronak Arun
-10:32 AM (2 minutes ago)
-to me
-
 import streamlit as st
 import pandas as pd
 import numpy as np
