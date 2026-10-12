@@ -1,22 +1,25 @@
-import streamlit as st
-import pandas as pd
-import numpy as np
-import math
-import time
 import matplotlib.pyplot as plt
-import plotly.graph_objects as go
+import pandas as pd
 import plotly.express as px
-from sklearn.tree import DecisionTreeClassifier, export_text, plot_tree
-from sklearn.preprocessing import LabelEncoder
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import confusion_matrix, accuracy_score
+import plotly.graph_objects as go
+import streamlit as st
+from sklearn.tree import export_text, plot_tree
 
-MAP_COLUMNS = ['Field_ID', 'Latitude', 'Longitude', 'Coordinate_Source']
+from irrigation_core import (
+    CLASS_ORDER,
+    TARGET,
+    add_field_recommendations,
+    irrigation_stress,
+    load_data,
+    train_model,
+)
+
+NEED_COLORS = {"High": "#d84343", "Medium": "#f0a020", "Low": "#3f9d5a"}
 
 st.set_page_config(
     page_title="Smart Irrigation Predictor",
     page_icon="🌾",
-    layout="wide",  
+    layout="wide",
     initial_sidebar_state="expanded"
 )
 
@@ -30,9 +33,6 @@ st.markdown(
         --line: #d9e5e8;
     }
     .block-container { padding-top: 2rem; padding-bottom: 3rem; }
-    [data-testid="stSidebar"] { background: #f4f8f6; border-right: 1px solid var(--line); }
-    [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2,
-    [data-testid="stSidebar"] h3 { color: var(--ink); }
     .app-hero {
         background: linear-gradient(110deg, #17324d 0%, #1f7a5a 100%);
         border-radius: 16px;
@@ -44,7 +44,7 @@ st.markdown(
     .app-hero h1 { margin: 0; font-size: 2.15rem; letter-spacing: 0; color: white; }
     .app-hero p { margin: 0.45rem 0 0; color: #d7eee5; font-size: 1rem; }
     .section-kicker {
-        color: var(--leaf);
+        color: #b9ead5;
         font-size: 0.75rem;
         font-weight: 800;
         letter-spacing: 0.08em;
@@ -52,81 +52,76 @@ st.markdown(
         margin-bottom: 0.25rem;
     }
     div[data-testid="stMetric"] {
-        background: white;
         border: 1px solid var(--line);
         border-left: 4px solid var(--leaf);
         padding: 0.8rem 1rem;
         border-radius: 10px;
     }
+    .pump-card {
+        border-radius: 12px;
+        padding: 22px;
+        text-align: center;
+        color: white;
+    }
+    .pump-card h4 { margin: 0; opacity: 0.85; color: white; }
+    .pump-card h1 { margin: 5px 0; font-size: 40px; color: white; }
+    .pump-card p { margin: 0; opacity: 0.9; }
     </style>
     """,
     unsafe_allow_html=True
 )
 
+
+@st.cache_data
+def get_data():
+    return load_data()
+
+
 @st.cache_resource
-def train_id3_model():
-    # Read CSV dataset
-    df = pd.read_csv('irrigation_prediction.csv')
-    data = df.copy()
-    
-    # Store fitted encoders for categorical columns
-    encoders = {}
-    categorical_cols = data.select_dtypes(include=['object', 'category']).columns
-    
-    for col in categorical_cols:
-        if col != 'Irrigation_Need': # Keep target separate
-            le = LabelEncoder()
-            data[col] = le.fit_transform(data[col].astype(str))
-            encoders[col] = le
+def get_model():
+    return train_model(get_data())
 
-    # Define target and features using exact column name 'Irrigation_Need'
-    X = data.drop(columns=['Irrigation_Need'] + [column for column in MAP_COLUMNS if column in data.columns])
-    y = df['Irrigation_Need'] # Keep target as string ('High', 'Medium', 'Low')
 
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-    
-    # Train ID3 Decision Tree (Entropy criterion)
-    model = DecisionTreeClassifier(criterion='entropy', random_state=42)
-    model.fit(X_train, y_train)
-    
-    return model, encoders, X_train.columns.tolist(), X_test, y_test, df
+@st.cache_data
+def get_depth_curve():
+    return get_model().depth_curve()
 
-# Load data and train model
-model, label_encoders, feature_columns, X_test, y_test, df_raw = train_id3_model()
+
+df_raw = get_data()
+trained = get_model()
+tree = trained.tree
 
 st.markdown(
-    "<div class='app-hero'><div class='section-kicker' style='color:#b9ead5;'>FIELD INTELLIGENCE</div><h1>Smart Irrigation Predictor</h1><p>Decision support for healthier crops, clearer priorities, and smarter water use.</p></div>",
+    "<div class='app-hero'><div class='section-kicker'>FIELD INTELLIGENCE</div>"
+    "<h1>Smart Irrigation Predictor</h1>"
+    "<p>Decision support for healthier crops, clearer priorities, and smarter water use.</p></div>",
     unsafe_allow_html=True
 )
 
-# Initialize Session State
-if "page" not in st.session_state:
-    st.session_state.page = "Irrigation Predictor"
-
-# Sidebar Navigation
-st.sidebar.title("Navigation")
+PAGES = ["Irrigation Predictor", "Visualizations", "GIS Satellite Map"]
 with st.sidebar:
-    if st.button("Irrigation Predictor", width="stretch"):
-        st.session_state.page = "Irrigation Predictor"
-    if st.button("Visualizations", width="stretch"):
-        st.session_state.page = "Visualizations"
-    if st.button("GIS Satellite Map", width="stretch"):
-        st.session_state.page = "GIS Satellite Map"
+    st.title("Navigation")
+    page = st.radio("Page", PAGES, label_visibility="collapsed")
+    st.markdown("---")
+    st.caption(
+        f"Model: random forest of {trained.forest.n_estimators} entropy trees · {len(df_raw):,} records · "
+        f"test accuracy {trained.evaluation()['accuracy']:.1%}"
+    )
 
-# Helper Function for Custom Styled Sliders (Fixed Flexbox Layout to Prevent Shrinkage)
-def styled_slider(label, min_val, max_val, default, step=1.0, icon=""):
+
+def styled_slider(label, min_val, max_val, default, step=1.0):
+    """Slider with a bold value readout aligned to the right of its label."""
     if label not in st.session_state:
-        st.session_state[label] = default
+        st.session_state[label] = float(default)
 
     st.markdown(
-        f"<div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; margin-top: 6px;'>"
-        f"<span style='font-size: 15px; font-weight: 600;'>{icon} {label}</span>"
-        f"<span style='font-size: 20px; font-weight: bold;'>{st.session_state[label]}</span>"
+        f"<div style='display: flex; justify-content: space-between; align-items: center; margin: 6px 0 8px;'>"
+        f"<span style='font-size: 15px; font-weight: 600;'>{label}</span>"
+        f"<span style='font-size: 20px; font-weight: bold;'>{st.session_state[label]:g}</span>"
         f"</div>",
         unsafe_allow_html=True
     )
-
-    value = st.slider(
+    return st.slider(
         label=label,
         min_value=float(min_val),
         max_value=float(max_val),
@@ -134,30 +129,52 @@ def styled_slider(label, min_val, max_val, default, step=1.0, icon=""):
         key=label,
         label_visibility="collapsed"
     )
-    return value
+
+
+def option_select(label, column):
+    return st.selectbox(label, trained.category_options(column))
+
+
+def stress_gauge(score):
+    fig = go.Figure(go.Indicator(
+        mode="gauge+number",
+        value=score,
+        number={"suffix": "%", "font": {"size": 36}},
+        title={"text": "Irrigation Stress Level", "font": {"size": 18}},
+        gauge={
+            "axis": {"range": [0, 100], "dtick": 20},
+            "bar": {"color": "#17324d", "thickness": 0.3},
+            "steps": [
+                {"range": [0, 35], "color": "#9fd8b0"},
+                {"range": [35, 70], "color": "#ffd58a"},
+                {"range": [70, 100], "color": "#f4a3a3"}
+            ]
+        }
+    ))
+    fig.update_layout(height=270, margin=dict(l=30, r=30, t=60, b=10))
+    return fig
+
 
 # ==========================================
 # PAGE 1: IRRIGATION PREDICTOR
 # ==========================================
-if st.session_state.page == "Irrigation Predictor":
+if page == "Irrigation Predictor":
     st.subheader("Enter Field & Environmental Details")
     st.markdown("Fill in key field observations below to evaluate irrigation requirements.")
 
-    # Core Operational Factors
     st.markdown("#### Core Field & Crop Parameters")
     col1, col2 = st.columns(2)
 
     with col1:
-        crop_type = st.selectbox("Crop Type", ["Wheat", "Maize", "Cotton", "Rice", "Sugarcane", "Potato"])
-        crop_stage = st.selectbox("Crop Growth Stage", ["Sowing", "Vegetative", "Flowering", "Harvest"])
-        soil_type = st.selectbox("Soil Type", ["Clay", "Silt", "Sandy", "Loamy"])
+        crop_type = option_select("Crop Type", "Crop_Type")
+        crop_stage = option_select("Crop Growth Stage", "Crop_Growth_Stage")
+        soil_type = option_select("Soil Type", "Soil_Type")
 
     with col2:
         soil_moisture = styled_slider("Soil Moisture (%)", 8.0, 65.0, 35.0, step=0.5)
-        season = st.selectbox("Season", ["Rabi", "Kharif", "Zaid"])
-        mulching = st.selectbox("Mulching Used?", ["Yes", "No"])
+        season = option_select("Season", "Season")
+        mulching = option_select("Mulching Used?", "Mulching_Used")
 
-    # Secondary / Environmental Factors in clean expander
     with st.expander("Advanced Soil, Weather & Secondary Parameters", expanded=False):
         col_adv1, col_adv2 = st.columns(2)
         with col_adv1:
@@ -166,248 +183,181 @@ if st.session_state.page == "Irrigation Predictor":
             rainfall = styled_slider("Rainfall (mm)", 0.0, 2500.0, 1200.0, step=10.0)
             sunlight = styled_slider("Sunlight Hours/Day", 4.0, 11.0, 7.5, step=0.1)
             wind_speed = styled_slider("Wind Speed (km/h)", 0.5, 20.0, 10.0, step=0.5)
-            field_area = styled_slider("Field Area (Hectares)", 0.3, 15.0, 5.0, step=0.5)
+            field_area = styled_slider("Field Area (Hectares)", 0.3, 15.0, 5.0, step=0.1)
 
         with col_adv2:
             soil_ph = styled_slider("Soil pH", 4.8, 8.2, 6.5, step=0.1)
             organic_carbon = styled_slider("Organic Carbon (%)", 0.3, 1.6, 0.9, step=0.05)
             electrical_conductivity = styled_slider("Electrical Conductivity (dS/m)", 0.1, 3.5, 1.8, step=0.1)
-            irrigation_type = st.selectbox("Current Irrigation Type", ["Rainfed", "Canal", "Drip", "Sprinkler"])
-            water_source = st.selectbox("Water Source", ["Reservoir", "Groundwater", "River", "Rainwater"])
+            irrigation_type = option_select("Current Irrigation Type", "Irrigation_Type")
+            water_source = option_select("Water Source", "Water_Source")
             previous_irrigation = styled_slider("Previous Irrigation (mm)", 0.0, 120.0, 50.0, step=1.0)
-            region = st.selectbox("Region", ["North", "South", "East", "West", "Central"])
+            region = option_select("Region", "Region")
 
-    # Real-time Threshold Alerts
     if soil_moisture < 20.0:
-        st.warning("Soil Moisture is critically low! High irrigation may be required.")
+        st.warning("Soil moisture is critically low. High irrigation may be required.")
     if rainfall < 500.0:
         st.info("Low rainfall region detected. Monitor water availability closely.")
     if temp > 35.0:
         st.warning("High temperatures will increase evapotranspiration rates.")
 
-    # Format input row for model prediction
-    input_dict = {
-        'Soil_Type': label_encoders['Soil_Type'].transform([soil_type])[0],
-        'Soil_pH': soil_ph,
-        'Soil_Moisture': soil_moisture,
-        'Organic_Carbon': organic_carbon,
-        'Electrical_Conductivity': electrical_conductivity,
-        'Temperature_C': temp,
-        'Humidity': humidity,
-        'Rainfall_mm': rainfall,
-        'Sunlight_Hours': sunlight,
-        'Wind_Speed_kmh': wind_speed,
-        'Crop_Type': label_encoders['Crop_Type'].transform([crop_type])[0],
-        'Crop_Growth_Stage': label_encoders['Crop_Growth_Stage'].transform([crop_stage])[0],
-        'Season': label_encoders['Season'].transform([season])[0],
-        'Irrigation_Type': label_encoders['Irrigation_Type'].transform([irrigation_type])[0],
-        'Water_Source': label_encoders['Water_Source'].transform([water_source])[0],
-        'Field_Area_hectare': field_area,
-        'Mulching_Used': label_encoders['Mulching_Used'].transform([mulching])[0],
-        'Previous_Irrigation_mm': previous_irrigation,
-        'Region': label_encoders['Region'].transform([region])[0]
+    field_values = {
+        "Soil_Type": soil_type,
+        "Soil_pH": soil_ph,
+        "Soil_Moisture": soil_moisture,
+        "Organic_Carbon": organic_carbon,
+        "Electrical_Conductivity": electrical_conductivity,
+        "Temperature_C": temp,
+        "Humidity": humidity,
+        "Rainfall_mm": rainfall,
+        "Sunlight_Hours": sunlight,
+        "Wind_Speed_kmh": wind_speed,
+        "Crop_Type": crop_type,
+        "Crop_Growth_Stage": crop_stage,
+        "Season": season,
+        "Irrigation_Type": irrigation_type,
+        "Water_Source": water_source,
+        "Field_Area_hectare": field_area,
+        "Mulching_Used": mulching,
+        "Previous_Irrigation_mm": previous_irrigation,
+        "Region": region,
     }
 
-    input_df = pd.DataFrame([input_dict])
-
-    # Prediction Action Button
-    if st.button("Predict Irrigation Need & Pump Status", width="stretch"):
-        prediction = model.predict(input_df)[0]
-        probabilities = model.predict_proba(input_df)[0]
-        class_names = model.classes_
-        
-        prob_dict = dict(zip(class_names, probabilities))
-        high_prob = prob_dict.get('High', 0.0) * 100
-        med_prob = prob_dict.get('Medium', 0.0) * 100
-        low_prob = prob_dict.get('Low', 0.0) * 100
+    if st.button("Predict Irrigation Need & Pump Status", type="primary", width="stretch"):
+        prediction, probabilities = trained.predict(field_values)
 
         st.markdown("---")
         st.subheader("Prediction Result & Automated Actuation")
 
-        # Top Banner: Automated Smart Pump Control Status
         pump_col1, pump_col2 = st.columns([2, 3])
-        
+        pump_states = {
+            "High": ("#1b5e20", "ON", "Irrigation valve opened · actuator active"),
+            "Medium": ("#c75b00", "STANDBY", "Scheduled for evening run"),
+            "Low": ("#455a64", "OFF", "Moisture sufficient · pump deactivated"),
+        }
+        background, status, detail = pump_states[prediction]
         with pump_col1:
-            if prediction == "High":
-                st.markdown("""
-                <div style="background-color: #1b5e20; border-radius: 10px; padding: 22px; text-align: center; color: white;">
-                    <h4 style="margin:0; padding:0; color: #a5d6a7;">PUMP STATUS</h4>
-                    <h1 style="margin:5px 0; font-size: 42px; color: #ffffff;">ON</h1>
-                    <p style="margin:0; color: #c8e6c9;">Irrigation Valve Opened | Actuator Active</p>
-                </div>
-                """, unsafe_allow_html=True)
-            elif prediction == "Medium":
-                st.markdown("""
-                <div style="background-color: #e65100; border-radius: 10px; padding: 22px; text-align: center; color: white;">
-                    <h4 style="margin:0; padding:0; color: #ffe0b2;">PUMP STATUS</h4>
-                    <h1 style="margin:5px 0; font-size: 38px; color: #ffffff;">STANDBY</h1>
-                    <p style="margin:0; color: #fff3e0;">Scheduled for Evening Run</p>
-                </div>
-                """, unsafe_allow_html=True)
-            else:
-                st.markdown("""
-                <div style="background-color: #b71c1c; border-radius: 10px; padding: 22px; text-align: center; color: white;">
-                    <h4 style="margin:0; padding:0; color: #ef9a9a;">PUMP STATUS</h4>
-                    <h1 style="margin:5px 0; font-size: 42px; color: #ffffff;">OFF</h1>
-                    <p style="margin:0; color: #ffcdd2;">Moisture Sufficient | Pump Deactivated</p>
-                </div>
-                """, unsafe_allow_html=True)
+            st.markdown(
+                f"<div class='pump-card' style='background-color: {background};'>"
+                f"<h4>PUMP STATUS</h4><h1>{status}</h1><p>{detail}</p></div>",
+                unsafe_allow_html=True
+            )
 
         with pump_col2:
-            target_stress = (low_prob * 0.1) + (med_prob * 0.5) + (high_prob * 1.0)
-            
-            def create_speedometer_gauge(score):
-                angle_deg = 180 - (score / 100.0 * 180)
-                angle_rad = math.radians(angle_deg)
-                
-                length = 0.35
-                center_x, center_y = 0.5, 0.20
-                
-                tip_x = center_x + length * math.cos(angle_rad)
-                tip_y = center_y + length * math.sin(angle_rad)
-                
-                base_width = 0.025
-                perp_rad = angle_rad + math.pi / 2
-                left_x = center_x + base_width * math.cos(perp_rad)
-                left_y = center_y + base_width * math.sin(perp_rad)
-                right_x = center_x - base_width * math.cos(perp_rad)
-                right_y = center_y - base_width * math.sin(perp_rad)
-
-                arrow_path = f"M {left_x} {left_y} L {tip_x} {tip_y} L {right_x} {right_y} Z"
-
-                fig = go.Figure(go.Indicator(
-                    mode="gauge+number",
-                    value=score,
-                    number={'suffix': "%", 'font': {'size': 32, 'color': 'white', 'weight': 'bold'}},
-                    title={'text': "Irrigation Stress Level (%)", 'font': {'size': 20, 'color': '#ffffff'}},
-                    domain={'x': [0, 1], 'y': [0, 1]},
-                    gauge={
-                        'axis': {'range': [0, 100], 'tickwidth': 2, 'tickcolor': "white", 'dtick': 20},
-                        'bar': {'color': "rgba(0,0,0,0)"},
-                        'steps': [
-                            {'range': [0, 35], 'color': "#4caf50"},
-                            {'range': [35, 70], 'color': "#ff9800"},
-                            {'range': [70, 100], 'color': "#f44336"}
-                        ]
-                    }
-                ))
-
-                fig.add_shape(
-                    type="path",
-                    path=arrow_path,
-                    fillcolor="#ffffff",
-                    line=dict(color="#111111", width=1.5)
-                )
-                
-                fig.add_shape(
-                    type="circle",
-                    x0=center_x - 0.04, y0=center_y - 0.04,
-                    x1=center_x + 0.04, y1=center_y + 0.04,
-                    fillcolor="#222222",
-                    line=dict(color="#ffffff", width=2)
-                )
-                fig.add_shape(
-                    type="circle",
-                    x0=center_x - 0.02, y0=center_y - 0.02,
-                    x1=center_x + 0.02, y1=center_y + 0.02,
-                    fillcolor="#e0e0e0",
-                    line=dict(color="#222222", width=1)
-                )
-
-                fig.update_layout(
-                    height=290,
-                    margin=dict(l=35, r=35, t=80, b=10),
-                    paper_bgcolor="rgba(0,0,0,0)",
-                    plot_bgcolor="rgba(0,0,0,0)"
-                )
-                return fig
-
-            gauge_placeholder = st.empty()
-            steps = 15
-            for i in range(1, steps + 1):
-                current_val = (target_stress / steps) * i
-                fig_anim = create_speedometer_gauge(current_val)
-                gauge_placeholder.plotly_chart(fig_anim, width="stretch", key=f"speedo_step_{i}")
-                time.sleep(0.02)
+            st.plotly_chart(stress_gauge(irrigation_stress(probabilities)))
 
         st.markdown("### Field Condition Analysis")
         if prediction == "High":
-            st.error("**HIGH IRRIGATION NEED** — Critical moisture deficit detected! Automated pump switch activated.")
+            st.error("**HIGH IRRIGATION NEED** — Critical moisture deficit detected. Automated pump switch activated.")
         elif prediction == "Medium":
-            st.warning("**MEDIUM IRRIGATION NEED** — Moderate moisture levels. Drip irrigation queued for optimal timeframe.")
+            st.warning("**MEDIUM IRRIGATION NEED** — Moderate moisture levels. Irrigation queued for the optimal timeframe.")
         else:
-            st.success("**LOW IRRIGATION NEED** — Soil moisture levels are optimal. Water conservation mode active.")
+            st.success("**LOW IRRIGATION NEED** — Soil moisture levels are adequate. Water conservation mode active.")
 
         col3, col4, col5 = st.columns(3)
-        with col3:
-            st.metric("High Need Probability", f"{high_prob:.1f}%")
-        with col4:
-            st.metric("Medium Need Probability", f"{med_prob:.1f}%")
-        with col5:
-            st.metric("Low Need Probability", f"{low_prob:.1f}%")
+        col3.metric("High Need Probability", f"{probabilities['High']:.1%}")
+        col4.metric("Medium Need Probability", f"{probabilities['Medium']:.1%}")
+        col5.metric("Low Need Probability", f"{probabilities['Low']:.1%}")
+        st.caption(
+            f"Probabilities are the averaged votes of {trained.forest.n_estimators} entropy decision trees. "
+            "Clear-cut fields score near 100%; inputs close to a decision boundary show split probabilities."
+        )
 
         st.markdown("---")
         st.subheader("Input Summary")
         summary = pd.DataFrame({
-            "Parameter": ["Soil Type", "Soil pH", "Soil Moisture", "Crop", "Growth Stage", "Season", "Temperature", "Rainfall", "Mulching"],
-            "Value": [soil_type, f"{soil_ph}", f"{soil_moisture}%", crop_type, crop_stage, season, f"{temp} °C", f"{rainfall} mm", mulching]
+            "Parameter": ["Soil Type", "Soil pH", "Soil Moisture", "Crop", "Growth Stage", "Season",
+                          "Temperature", "Rainfall", "Mulching"],
+            "Value": [soil_type, f"{soil_ph:g}", f"{soil_moisture:g}%", crop_type, crop_stage, season,
+                      f"{temp:g} °C", f"{rainfall:g} mm", mulching]
         })
-        st.dataframe(summary, width="stretch")
+        st.dataframe(summary, width="stretch", hide_index=True)
 
 # ==========================================
 # PAGE 2: VISUALIZATIONS
 # ==========================================
-if st.session_state.page == "Visualizations":
+if page == "Visualizations":
     st.subheader("Model Visualizations & Performance Metrics")
-    st.markdown("Interactive insights generated from ID3 Decision Tree training.")
+    st.markdown(
+        f"Predictions come from a random forest of {trained.forest.n_estimators} ID3 (entropy) trees. "
+        "The tree diagram, feature importance and depth analysis use a single entropy tree trained "
+        "on the same data, because one tree is readable where a forest is not."
+    )
+
+    evaluation = trained.evaluation()
+    tree_evaluation = trained.evaluation(tree)
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Forest Test Accuracy", f"{evaluation['accuracy']:.1%}")
+    m2.metric("Single Tree Accuracy", f"{tree_evaluation['accuracy']:.1%}")
+    m3.metric("Tree Depth / Leaves", f"{tree.get_depth()} / {tree.get_n_leaves()}")
+    m4.metric(
+        "Log Loss (forest vs tree)", f"{evaluation['log_loss']:.3f}",
+        delta=f"{evaluation['log_loss'] - tree_evaluation['log_loss']:.3f} vs tree", delta_color="inverse",
+        help="Lower is better. Measures how well predicted probabilities match outcomes."
+    )
 
     tab1, tab2, tab3, tab4 = st.tabs([
         "Decision Tree Architecture",
-        "Confusion Matrix",
+        "Model Evaluation",
         "Feature Importance",
         "Accuracy vs Tree Depth"
     ])
 
     with tab1:
         st.markdown("#### Trained Decision Tree Diagram")
-        st.info("This plot illustrates the trained Scikit-Learn Decision Tree structure, showing entropy decision splits, evaluated features, sample numbers, and class predictions at each node.")
-        
-        fig_tree, ax = plt.subplots(figsize=(20, 10))
+        max_drawn = min(5, tree.get_depth())
+        show_depth = st.slider("Levels to draw", 1, max_drawn, min(3, max_drawn))
+        st.caption(
+            "Each node shows its entropy split, sample count, and majority class. "
+            "Deeper levels are collapsed to keep the diagram readable; see the text rules for the full tree."
+        )
+        fig_tree, ax = plt.subplots(figsize=(min(3 * 2 ** show_depth, 40), 2.2 * (show_depth + 1)))
         plot_tree(
-            model,
-            feature_names=feature_columns,
-            class_names=[str(c) for c in model.classes_],
+            tree,
+            max_depth=show_depth,
+            feature_names=trained.feature_columns,
+            class_names=[str(c) for c in tree.classes_],
             filled=True,
             rounded=True,
             fontsize=8,
             ax=ax
         )
         st.pyplot(fig_tree)
+        plt.close(fig_tree)
+
+        with st.expander("Full tree as text rules"):
+            st.code(export_text(tree, feature_names=trained.feature_columns), language="text")
 
     with tab2:
-        y_pred = model.predict(X_test)
-        cm = confusion_matrix(y_test, y_pred, labels=['Low', 'Medium', 'High'])
         fig = px.imshow(
-            cm,
+            evaluation["confusion_matrix"],
             text_auto=True,
-            x=["Low", "Medium", "High"],
-            y=["Low", "Medium", "High"],
-            title="Confusion Matrix (Irrigation Need Prediction)",
+            x=CLASS_ORDER,
+            y=CLASS_ORDER,
+            title="Forest Confusion Matrix (Irrigation Need Prediction)",
             color_continuous_scale="Blues"
         )
         fig.update_xaxes(title="Predicted Class")
         fig.update_yaxes(title="Actual Class")
-        st.plotly_chart(fig, width="stretch")
-        st.info("The confusion matrix shows high precision across Low and Medium irrigation classes, with strong diagonal alignment indicating accurate field predictions.")
+        st.plotly_chart(fig)
+
+        report = evaluation["report"].loc[CLASS_ORDER, ["precision", "recall", "f1-score", "support"]]
+        st.markdown("#### Per-class metrics")
+        st.dataframe(
+            report.style.format({"precision": "{:.1%}", "recall": "{:.1%}", "f1-score": "{:.1%}",
+                                 "support": "{:.0f}"}),
+            width="stretch"
+        )
+        class_share = df_raw[TARGET].value_counts(normalize=True)
+        st.info(
+            f"High need makes up only {class_share.get('High', 0):.1%} of the dataset, so check its recall "
+            "here rather than relying on overall accuracy alone."
+        )
 
     with tab3:
-        importance_df = pd.DataFrame({
-            "Feature": feature_columns,
-            "Importance": model.feature_importances_
-        }).sort_values(by="Importance", ascending=True)
-
+        importance_df = trained.feature_importance()
         fig = px.bar(
-            importance_df[importance_df["Importance"] > 0],
+            importance_df[importance_df["Importance"] > 0].sort_values("Importance"),
             x="Importance",
             y="Feature",
             orientation="h",
@@ -415,163 +365,124 @@ if st.session_state.page == "Visualizations":
             color="Importance",
             color_continuous_scale="Blues"
         )
-        st.plotly_chart(fig, width="stretch")
-        st.info("Growth Stage, Soil Moisture, Mulching, and Rainfall are the dominant features driving the model's split points.")
+        st.plotly_chart(fig)
+        top_features = ", ".join(importance_df["Feature"].head(4).str.replace("_", " "))
+        unused = (importance_df["Importance"] == 0).sum()
+        st.info(
+            f"The strongest drivers of the tree's splits are {top_features}. "
+            f"{unused} of {len(importance_df)} features are never used by the trained tree."
+        )
 
     with tab4:
         st.markdown("### Accuracy vs Tree Depth")
-        depths = list(range(1, 11))
-        accuracies = []
-        X_tr = df_raw.drop(columns=['Irrigation_Need'] + [column for column in MAP_COLUMNS if column in df_raw.columns])
-        for col in X_tr.select_dtypes(include=['object', 'category']).columns:
-            X_tr[col] = label_encoders[col].transform(X_tr[col].astype(str))
-        
-        X_t_train, X_t_test, y_t_train, y_t_test = train_test_split(
-            X_tr, df_raw['Irrigation_Need'], test_size=0.2, random_state=42
-        )
-
-        for d in depths:
-            dt = DecisionTreeClassifier(criterion="entropy", max_depth=d, random_state=42)
-            dt.fit(X_t_train, y_t_train)
-            accuracies.append(accuracy_score(y_t_test, dt.predict(X_t_test)))
-
+        depth_curve = get_depth_curve()
         fig = px.line(
-            x=depths, y=accuracies, markers=True,
-            labels={"x": "Tree Depth", "y": "Accuracy"},
-            title="ID3 Decision Tree Accuracy across Max Depths"
+            depth_curve, x="Max Depth", y="Accuracy", markers=True,
+            title="ID3 Decision Tree Test Accuracy across Max Depths"
         )
-        st.plotly_chart(fig, width="stretch")
-        st.info("Model accuracy plateaus around depth 5. Pruning at max depth = 5 prevents overfitting on high-frequency noise.")
+        fig.update_yaxes(tickformat=".0%")
+        st.plotly_chart(fig)
+        best_accuracy = depth_curve["Accuracy"].max()
+        plateau_depth = int(depth_curve.loc[depth_curve["Accuracy"] >= best_accuracy - 0.005, "Max Depth"].min())
+        st.info(
+            f"Accuracy reaches within 0.5 points of its best ({best_accuracy:.1%}) at depth {plateau_depth}. "
+            f"The unpruned tree grows to depth {tree.get_depth()} on its own."
+        )
 
 # ==========================================
 # PAGE 3: GIS SATELLITE MAP
 # ==========================================
-if st.session_state.page == "GIS Satellite Map":
+if page == "GIS Satellite Map":
     st.subheader("GIS Satellite & Spatial Moisture Analytics")
-    
-    st.markdown("""
-    This dashboard currently uses simulated regional coordinates because the dataset does not contain GPS fields.
-    It identifies irrigation urgency, ranks fields for action, and estimates the water volume required for each zone.
-    """)
+    st.markdown(
+        "Identifies irrigation urgency, ranks fields for action, and estimates the water volume "
+        "required for each zone."
+    )
     st.markdown("---")
 
-    region_coords = {
-        'North': {'lat': 28.9, 'lon': 77.8},
-        'South': {'lat': 13.0, 'lon': 77.6},
-        'East': {'lat': 22.6, 'lon': 88.4},
-        'West': {'lat': 18.5, 'lon': 73.9},
-        'Central': {'lat': 21.2, 'lon': 79.1}
-    }
-
-    map_df = df_raw.sample(min(300, len(df_raw)), random_state=42).copy()
-
-    if {'Latitude', 'Longitude'}.issubset(map_df.columns):
-        map_df['latitude'] = map_df['Latitude']
-        map_df['longitude'] = map_df['Longitude']
-        map_source = 'Dataset field coordinates'
-    else:
-        lats, lons = [], []
-        random_generator = np.random.default_rng(42)
-        for reg in map_df['Region']:
-            base = region_coords.get(reg, {'lat': 20.5937, 'lon': 78.9629})
-            lats.append(base['lat'] + random_generator.uniform(-0.05, 0.05))
-            lons.append(base['lon'] + random_generator.uniform(-0.05, 0.05))
-        map_df['latitude'] = lats
-        map_df['longitude'] = lons
-        map_source = 'Simulated regional coordinates'
-    priority_scores = {'High': 100, 'Medium': 60, 'Low': 20}
-    water_targets = {'High': 35, 'Medium': 20, 'Low': 0}
-    map_df['Priority_Score'] = map_df['Irrigation_Need'].map(priority_scores)
-    map_df['Recommended_Action'] = map_df['Irrigation_Need'].map({
-        'High': 'Irrigate immediately',
-        'Medium': 'Schedule irrigation',
-        'Low': 'Monitor only'
-    })
-    moisture_deficit = (45.0 - map_df['Soil_Moisture']).clip(lower=0)
-    map_df['Recommended_Water_mm'] = (
-        map_df['Irrigation_Need'].map(water_targets)
-        + moisture_deficit * 0.25
-    ).where(map_df['Irrigation_Need'] != 'Low', 0).clip(upper=45).round(1)
-    map_df['Estimated_Water_L'] = (
-        map_df['Field_Area_hectare'] * map_df['Recommended_Water_mm'] * 10000
+    sample_size = min(300, len(df_raw))
+    map_df = add_field_recommendations(df_raw.sample(sample_size, random_state=42))
+    coordinate_source = map_df["Coordinate_Source"].iloc[0] if "Coordinate_Source" in map_df else "Unknown"
+    st.caption(
+        f"Showing {sample_size} sampled fields. Coordinate source: {coordinate_source}. "
+        "Replace demo coordinates with surveyed GPS data for production use."
     )
-    st.caption(f"Map source: {map_source}. Replace demo coordinates with surveyed GPS data for production use.")
 
     col_map1, col_map2 = st.columns([3, 1])
 
     with col_map2:
         st.markdown("#### GIS Map Filters")
-        
-        region_options = ["All Regions"] + list(map_df['Region'].unique())
+        region_options = ["All Regions"] + sorted(map_df["Region"].unique())
         selected_region = st.selectbox("Select Region", options=region_options, index=0)
-        
         need_options = ["All Urgency Levels", "High", "Medium", "Low"]
         selected_need = st.selectbox("Filter Irrigation Need", options=need_options, index=0)
-        
         color_by = st.selectbox(
             "Color Code By",
-            options=['Irrigation_Need', 'Priority_Score', 'Soil_Moisture', 'Crop_Type']
+            options=["Irrigation_Need", "Priority_Score", "Soil_Moisture", "Crop_Type"]
         )
 
-    filtered_map_df = map_df.copy()
+    filtered_map_df = map_df
     if selected_region != "All Regions":
-        filtered_map_df = filtered_map_df[filtered_map_df['Region'] == selected_region]
+        filtered_map_df = filtered_map_df[filtered_map_df["Region"] == selected_region]
     if selected_need != "All Urgency Levels":
-        filtered_map_df = filtered_map_df[filtered_map_df['Irrigation_Need'] == selected_need]
+        filtered_map_df = filtered_map_df[filtered_map_df[TARGET] == selected_need]
 
     with col_map1:
-        color_map = {'High': '#ef5350', 'Medium': '#ffca28', 'Low': '#66bb6a'}
-
         if filtered_map_df.empty:
             st.warning("No fields match the selected filters.")
         else:
-            fig_map = px.scatter_mapbox(
+            fig_map = px.scatter_map(
                 filtered_map_df,
-                lat="latitude",
-                lon="longitude",
+                lat="Latitude",
+                lon="Longitude",
                 color=color_by,
                 size="Field_Area_hectare",
                 hover_name="Crop_Type",
                 hover_data={
-                    "Soil_Moisture": ":.1f%",
-                    "Rainfall_mm": ":.0f mm",
-                    "Temperature_C": ":.1f °C",
                     "Field_ID": True,
-                    "Irrigation_Need": True,
+                    "Soil_Moisture": ":.1f",
+                    "Rainfall_mm": ":.0f",
+                    "Temperature_C": ":.1f",
+                    TARGET: True,
                     "Recommended_Action": True,
                     "Recommended_Water_mm": True,
-                    "Estimated_Water_L": ":,.0f L",
-                    "latitude": False,
-                    "longitude": False
+                    "Estimated_Water_L": ":,.0f",
+                    "Latitude": False,
+                    "Longitude": False
                 },
-                color_discrete_map=color_map if color_by == 'Irrigation_Need' else None,
+                color_discrete_map=NEED_COLORS if color_by == TARGET else None,
+                category_orders={TARGET: ["High", "Medium", "Low"]},
                 zoom=4.2,
                 center={"lat": 20.5937, "lon": 78.9629},
-                mapbox_style="open-street-map",
+                map_style="open-street-map",
                 title="Field Irrigation Priority Map"
             )
-
             fig_map.update_layout(height=550, margin={"r": 0, "t": 40, "l": 0, "b": 0})
-            st.plotly_chart(fig_map, width="stretch")
+            st.plotly_chart(fig_map)
 
     st.markdown("---")
     st.markdown("### Irrigation Action Summary")
+    has_rows = not filtered_map_df.empty
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Active Fields Monitored", len(filtered_map_df))
-    c2.metric("Avg Soil Moisture", f"{filtered_map_df['Soil_Moisture'].mean():.1f}%" if len(filtered_map_df) > 0 else "N/A")
-    c3.metric("High Need Fields", len(filtered_map_df[filtered_map_df['Irrigation_Need'] == 'High']))
-    c4.metric("Total Monitored Area", f"{filtered_map_df['Field_Area_hectare'].sum():.1f} Ha" if len(filtered_map_df) > 0 else "0 Ha")
-    c5.metric("Estimated Water", f"{filtered_map_df['Estimated_Water_L'].sum():,.0f} L" if len(filtered_map_df) > 0 else "0 L")
+    c2.metric("Avg Soil Moisture", f"{filtered_map_df['Soil_Moisture'].mean():.1f}%" if has_rows else "N/A")
+    c3.metric("High Need Fields", int((filtered_map_df[TARGET] == "High").sum()))
+    c4.metric("Total Monitored Area", f"{filtered_map_df['Field_Area_hectare'].sum():.1f} Ha")
+    c5.metric("Estimated Water", f"{filtered_map_df['Estimated_Water_L'].sum():,.0f} L")
 
     st.markdown("### Highest Priority Fields")
     priority_columns = [
-        'Region', 'Crop_Type', 'Soil_Moisture', 'Irrigation_Need',
-        'Priority_Score', 'Recommended_Action', 'Recommended_Water_mm',
-        'Estimated_Water_L'
+        "Field_ID", "Region", "Crop_Type", "Soil_Moisture", TARGET,
+        "Priority_Score", "Recommended_Action", "Recommended_Water_mm", "Estimated_Water_L"
     ]
-    priority_table = filtered_map_df.sort_values('Priority_Score', ascending=False)
-    st.dataframe(
-        priority_table[priority_columns].head(15),
-        width="stretch",
-        hide_index=True
+    priority_table = filtered_map_df.sort_values(
+        ["Priority_Score", "Estimated_Water_L"], ascending=False
+    )[priority_columns]
+    st.dataframe(priority_table.head(15), width="stretch", hide_index=True)
+    st.download_button(
+        "Download full priority list (CSV)",
+        priority_table.to_csv(index=False).encode("utf-8"),
+        file_name="irrigation_priority_fields.csv",
+        mime="text/csv",
+        disabled=not has_rows
     )
